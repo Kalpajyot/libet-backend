@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Online Libet Clock Task</title>
+  <style>
+    /* CSS Styles remain the same as the previous version */
+    body { font-family: Arial, sans-serif; margin: 0; padding-bottom: 50px; min-height: 100vh; display: flex; flex-direction: column; align-items: center; background-color: #eee; }
+    #clock-container { position: relative; width: 400px; height: 400px; border: 10px solid #000; border-radius: 50%; background: #fff; overflow: hidden; margin-top: 20px; }
+    #clock { position: absolute; width: 100%; height: 100%; border-radius: 50%; top: 0; left: 0; }
+    #clock-face { position: relative; width: 100%; height: 100%; border-radius: 50%; }
+    #pointer { position: absolute; width: 15px; height: 15px; background-color: red; border-radius: 50%; top: 50%; left: 50%; transform-origin: center center; }
+    .tick { position: absolute; width: 2px; height: 10px; background: black; top: 50%; left: 50%; transform-origin: center center; transform: translate(-50%, -100%) rotate(var(--angle)) translateY(-190px); }
+    .tick.big { width: 4px; height: 20px; transform: translate(-50%, -100%) rotate(var(--angle)) translateY(-185px); }
+    .label { position: absolute; font-size: 16px; font-weight: bold; top: 50%; left: 50%; transform-origin: center center; transform: translate(-50%, -50%) translate(var(--x), var(--y)); }
+    #controls, #intention-section, #data-actions { margin-top: 20px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    #intention-section { display: none; border: 1px dashed #aaa; padding: 10px; border-radius: 5px; background-color: #f9f9f9; }
+    #intention-label { margin-right: 5px; }
+    #intention-input { width: 60px; padding: 8px; font-size: 16px; }
+    .button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; color: white; border-radius: 5px; transition: background-color 0.3s ease; }
+    #start-button { background-color: #4CAF50; }
+    #start-button:hover:not(:disabled) { background-color: #45a049; }
+    #start-button:disabled { background-color: #cccccc; cursor: not-allowed; }
+    #confirm-intention-button { background-color: #2196F3; }
+    #confirm-intention-button:hover:not(:disabled) { background-color: #0b7dda; }
+    #confirm-intention-button:disabled { background-color: #cccccc; cursor: not-allowed; }
+    #clear-button { background-color: #f44336; }
+    #clear-button:hover { background-color: #da190b; }
+    #download-csv-button { background-color: #ff9800; }
+    #download-csv-button:hover { background-color: #e68a00; }
+    #time-display { font-size: 20px; margin-top: 15px; color: #333; min-height: 25px; text-align: center; width: 90%;}
+    #results-log { margin-top: 20px; padding: 15px; border: 1px solid #ccc; background-color: #fff; width: 80%; max-width: 600px; max-height: 250px; overflow-y: auto; text-align: left; }
+    #results-log h2 { margin-top: 0; text-align: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+    #results-log p { margin: 5px 0; font-size: 15px; border-bottom: 1px dashed #eee; padding-bottom: 5px; }
+    #results-log p:last-child { border-bottom: none; }
+    @keyframes rotateDot { from { transform: translate(-50%, -50%) rotate(0deg) translateX(180px); } to { transform: translate(-50%, -50%) rotate(360deg) translateX(180px); } }
+  </style>
+</head>
+<body>
+
+<h1>Online Libet Clock Task</h1>
+
+<div id="clock-container">
+  <div id="clock">
+    <div id="clock-face">
+      <div id="pointer"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Main Task Control -->
+<div id="controls">
+    <button id="start-button" class="button">Start Task</button>
+</div>
+
+<!-- Status Display -->
+<div id="time-display">Ready... (Participant ID: <span id="participant-id-display">Loading...</span>)</div>
+
+<!-- Intention Input Section (Initially Hidden) -->
+<div id="intention-section">
+    <label for="intention-input" id="intention-label">Report Intention Time (1-60):</label>
+    <input type="number" id="intention-input" min="1" max="60">
+    <button id="confirm-intention-button" class="button">Confirm & Send Data</button>
+</div>
+
+<!-- Data Management Buttons -->
+<div id="data-actions">
+    <button id="download-csv-button" class="button">Download Session Data (CSV)</button>
+    <button id="clear-button" class="button">Clear Session Log</button>
+</div>
+
+<!-- Results Display Area -->
+<div id="results-log">
+    <h2>Session Log</h2>
+    <!-- Log entries for the current session will appear here -->
+</div>
+
+
+<script>
+    // --- DOM Elements ---
+    const startButton = document.getElementById('start-button');
+    const clearButton = document.getElementById('clear-button');
+    const downloadCsvButton = document.getElementById('download-csv-button');
+    const timeDisplay = document.getElementById('time-display');
+    const pointer = document.getElementById('pointer');
+    const clockFace = document.getElementById('clock-face');
+    const resultsLog = document.getElementById('results-log');
+    const intentionSection = document.getElementById('intention-section');
+    const intentionInput = document.getElementById('intention-input');
+    const confirmIntentionButton = document.getElementById('confirm-intention-button');
+    const participantIdDisplay = document.getElementById('participant-id-display');
+
+    // --- State Variables ---
+    let taskStarted = false;
+    let clockRunning = false;
+    let isStopPending = false;
+    let awaitingIntention = false;
+
+    // --- Task Parameters ---
+    const clockSpeedSeconds = 5.1;
+    const stopDelayMilliseconds = 1000;
+
+    // --- Data Collection ---
+    let trialCounter = 0;
+    let sessionResults = []; // Holds data ONLY for the current browser session
+    let currentTrialData = null; // Temp storage for the current trial
+    let participantId = null; // Will hold the participant's ID
+
+    // !!! IMPORTANT: Replace with your actual server endpoint !!!
+    const SERVER_ENDPOINT_URL = 'http://localhost:3000/api/save-trial';; // <--- CHANGE THIS
+
+    // --- Initialization ---
+    document.addEventListener('DOMContentLoaded', () => {
+        participantId = getParticipantId(); // Assign participant ID
+        participantIdDisplay.textContent = participantId || 'N/A'; // Display it
+        createTicks();
+        displayResultsLog(); // Display empty log initially
+        pointer.style.transform = `translate(-50%, -50%) rotate(0deg) translateX(180px)`;
+        timeDisplay.textContent = `Ready... (Participant ID: ${participantId || 'N/A'})`;
+        // Add listeners
+        startButton.addEventListener('click', startTask);
+        clearButton.addEventListener('click', clearSessionLog);
+        downloadCsvButton.addEventListener('click', downloadSessionCSV);
+        confirmIntentionButton.addEventListener('click', confirmIntentionAndSendData);
+    });
+
+    // --- Participant ID Placeholder ---
+    function getParticipantId() {
+        // Example: Generate a simple random ID if not found in sessionStorage
+        let pid = sessionStorage.getItem('libetParticipantId');
+        if (!pid) {
+            pid = `P${Date.now().toString().slice(-6)}${Math.random().toString(36).substring(2, 5)}`;
+            sessionStorage.setItem('libetParticipantId', pid);
+        }
+        return pid;
+        // In a real study, you might get this from URL parameters, a login, etc.
+    }
+
+    // --- Clock Face Setup ---
+    function createTicks() {
+        const radius = 160, tickRadius = 190, bigTickRadius = 185;
+        const pointerElement = document.getElementById('pointer');
+        clockFace.innerHTML = ''; if (pointerElement) clockFace.appendChild(pointerElement);
+        for (let i = 0; i < 60; i++) {
+            const angle = i * 6; const tick = document.createElement('div');
+            tick.classList.add('tick'); tick.style.setProperty('--angle', `${angle}deg`);
+            if (i % 5 === 0) {
+                tick.classList.add('big'); tick.style.transform = `translate(-50%, -100%) rotate(${angle}deg) translateY(-${bigTickRadius}px)`;
+                const label = document.createElement('div'); label.classList.add('label');
+                const labelValue = (i === 0) ? 60 : i; label.textContent = labelValue;
+                const angleRad = (angle - 90) * Math.PI / 180;
+                const x = radius * Math.cos(angleRad); const y = radius * Math.sin(angleRad);
+                label.style.setProperty('--x', `${x}px`); label.style.setProperty('--y', `${y}px`); clockFace.appendChild(label);
+            } else {
+                tick.classList.add('small'); tick.style.transform = `translate(-50%, -100%) rotate(${angle}deg) translateY(-${tickRadius}px)`;
+            }
+            clockFace.appendChild(tick);
+        }
+    }
+
+    // --- Session Results Display ---
+    function displayResultsLog() {
+        resultsLog.innerHTML = '<h2>Session Log</h2>';
+        if (sessionResults.length === 0) {
+             resultsLog.innerHTML += '<p>No trials completed in this session yet.</p>';
+        } else {
+            sessionResults.forEach(result => {
+                const resultElement = document.createElement('p');
+                let text = `Trial ${result.trial}: Start ~${result.startPosition}, Intention ~${result.intentionTime ?? 'N/A'}`;
+                // text += `, KeyPress ~${result.keyPressPosition ?? 'N/A'}`; // Uncomment to show W-time in log
+                resultElement.textContent = text;
+                resultsLog.appendChild(resultElement);
+            });
+        }
+         resultsLog.scrollTop = resultsLog.scrollHeight;
+    }
+
+    function clearSessionLog() {
+        // Note: This only clears the log visible in *this* browser session.
+        // It does NOT delete data already sent to the server.
+        if (confirm("Clear the session log displayed on screen? (This will not delete data already saved on the server)")) {
+            sessionResults = [];
+            // trialCounter = 0; // Decide if you want to reset trial counter for the session
+            currentTrialData = null;
+            displayResultsLog();
+            timeDisplay.textContent = `Session log cleared. Ready... (Participant ID: ${participantId || 'N/A'})`;
+        }
+    }
+
+    // --- CSV Download (Session Data Only) ---
+    function downloadSessionCSV() {
+        if (sessionResults.length === 0) {
+            alert("No data in the current session log to download.");
+            return;
+        }
+        let csvContent = "data:text/csv;charset=utf-8,";
+        const header = ["ParticipantID", "Trial", "StartPosition", "KeyPressPosition", "IntentionTime"];
+        csvContent += header.join(",") + "\r\n";
+        sessionResults.forEach(result => {
+            const row = [
+                participantId, // Add participant ID to each row
+                result.trial,
+                result.startPosition ?? 'N/A',
+                result.keyPressPosition ?? 'N/A',
+                result.intentionTime ?? 'N/A'
+            ];
+            csvContent += row.join(",") + "\r\n";
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `libet_session_${participantId}_${new Date().toISOString().slice(0,10)}.csv`);
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    }
+
+    // --- Data Sending ---
+    async function sendDataToServer(dataToSend) {
+        // Add participant ID to the data object before sending
+        dataToSend.participantId = participantId;
+
+        timeDisplay.textContent = `Sending Trial ${dataToSend.trial} data...`;
+        confirmIntentionButton.disabled = true; // Disable button while sending
+
+        try {
+            const response = await fetch(SERVER_ENDPOINT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', },
+                body: JSON.stringify(dataToSend),
+            });
+
+            if (!response.ok) {
+                // Server returned an error (e.g., 4xx, 5xx)
+                const errorText = await response.text(); // Get error details if available
+                console.error('Server Error:', response.status, errorText);
+                timeDisplay.textContent = `Error: Server couldn't save Trial ${dataToSend.trial}. Please contact researcher.`;
+                // Consider more robust error handling here (e.g., local fallback)
+                // Re-enable confirm button potentially? Or stop the experiment?
+            } else {
+                // Success!
+                console.log(`Trial ${dataToSend.trial} data sent successfully.`);
+                timeDisplay.textContent = `Trial ${dataToSend.trial} data saved. Ready for next trial.`;
+                // Reset UI for the next trial (now done after successful send)
+                awaitingIntention = false;
+                currentTrialData = null;
+                intentionSection.style.display = 'none';
+                startButton.textContent = 'Start Next Task';
+                startButton.disabled = false;
+            }
+        } catch (error) {
+            // Network error (e.g., user offline, server down)
+            console.error('Network Error:', error);
+            timeDisplay.textContent = `Error: Could not connect to server to save Trial ${dataToSend.trial}. Check connection.`;
+            // Definitely consider a fallback mechanism here if data loss is critical
+            confirmIntentionButton.disabled = false; // Re-enable button to allow retry?
+        }
+    }
+
+
+    // --- Task Flow ---
+    function startTask() {
+      if (taskStarted || awaitingIntention) return;
+      taskStarted = true;
+      trialCounter++;
+      clockRunning = false; isStopPending = false;
+      pointer.style.animation = 'none';
+
+      const randomStartAngle = Math.floor(Math.random() * 360);
+      pointer.style.transform = `translate(-50%, -50%) rotate(${randomStartAngle}deg) translateX(180px)`;
+      const startPositionDegrees = (randomStartAngle + 90) % 360;
+      const startPositionValue = Math.round(startPositionDegrees / 6);
+      const displayStartPosition = (startPositionValue === 0 || startPositionValue > 60) ? 60 : startPositionValue;
+
+      currentTrialData = {
+          trial: trialCounter,
+          startPosition: displayStartPosition,
+          keyPressPosition: null,
+          intentionTime: null
+          // participantId will be added before sending
+      };
+
+      intentionSection.style.display = 'none';
+      startButton.textContent = `Trial ${trialCounter} Active`;
+      startButton.disabled = true;
+      timeDisplay.textContent = 'Press any key to start the dot.';
+      document.addEventListener('keydown', handleKeyPress);
+    }
+
+    function startClock() {
+      if (!clockRunning && taskStarted) {
+        pointer.style.animation = `rotateDot ${clockSpeedSeconds}s linear infinite`;
+        clockRunning = true; isStopPending = false;
+        timeDisplay.textContent = 'Dot is moving. Press any key again to signal stop.';
+      }
+    }
+
+    function initiateStop() {
+        if (!clockRunning || isStopPending || !currentTrialData) return;
+        isStopPending = true;
+
+        const computedStyle = window.getComputedStyle(pointer);
+        const transformMatrix = computedStyle.transform || computedStyle.webkitTransform || computedStyle.mozTransform;
+        let angle = 0;
+        if (transformMatrix && transformMatrix !== 'none') {
+            const matrix = transformMatrix.match(/^matrix\((.+)\)$/);
+            if (matrix && matrix[1]) {
+                 const values = matrix[1].split(',').map(Number);
+                 if (values.length >= 2) { const a = values[0]; const b = values[1]; angle = Math.atan2(b, a) * (180 / Math.PI); if (angle < 0) angle += 360; }
+            }
+        }
+        const clockPositionDegrees = (angle + 90) % 360; const clockValue = Math.round(clockPositionDegrees / 6);
+        const keyPressPosition = (clockValue === 0 || clockValue > 60) ? 60 : clockValue;
+        currentTrialData.keyPressPosition = keyPressPosition;
+
+        timeDisplay.textContent = `Key press registered. Dot will stop shortly...`;
+        setTimeout(finalizeStop, stopDelayMilliseconds);
+    }
+
+    function finalizeStop() {
+        if (!isStopPending) return;
+        pointer.style.animation = 'none';
+        clockRunning = false; isStopPending = false; taskStarted = false;
+        awaitingIntention = true;
+        document.removeEventListener('keydown', handleKeyPress);
+
+        intentionInput.value = '';
+        intentionSection.style.display = 'flex';
+        intentionInput.focus();
+        timeDisplay.textContent = `Trial ${trialCounter}: Dot stopped. Please report your intention time (M-time).`;
+        startButton.disabled = true;
+        confirmIntentionButton.disabled = false; // Enable confirm button now
+    }
+
+    // Renamed function
+    function confirmIntentionAndSendData() {
+        if (!awaitingIntention || !currentTrialData) return;
+        const intentionValue = parseInt(intentionInput.value, 10);
+        if (isNaN(intentionValue) || intentionValue < 1 || intentionValue > 60) {
+            alert("Please enter a valid intention time between 1 and 60.");
+            intentionInput.focus(); return;
+        }
+
+        // Store M-time locally first
+        currentTrialData.intentionTime = intentionValue;
+
+        // Add to session log (optional, for immediate display)
+        sessionResults.push({...currentTrialData}); // Add a copy to session log
+        displayResultsLog(); // Update the visible log
+
+        // Attempt to send data to the server
+        sendDataToServer(currentTrialData); // This function now handles UI reset on success
+
+        // Note: UI reset (hiding input, enabling start button) is now handled
+        // within sendDataToServer upon successful response from the server.
+        // If the send fails, the UI might remain in the 'awaiting confirmation' state
+        // depending on the error handling in sendDataToServer.
+    }
+
+    function handleKeyPress(event) {
+        event.preventDefault();
+        if (!taskStarted) return;
+        if (!clockRunning) { startClock(); }
+        else if (!isStopPending) { initiateStop(); }
+    }
+
+</script>
+
+</body>
+</html>
