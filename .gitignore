@@ -1,0 +1,15 @@
+# Ignore Node specific files if you ever use npm locally for tools
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Ignore OS generated files
+.DS_Store
+Thumbs.db
+
+# Ignore sensitive environment files (though less common for pure frontend)
+.env
+
+# Ignore build output if you had a build step (you don't currently)
+# dist/
+# build/
